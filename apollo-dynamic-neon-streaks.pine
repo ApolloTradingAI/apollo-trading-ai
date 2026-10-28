@@ -1,0 +1,108 @@
+//@version=6
+indicator("ApolloTradingAI — Dynamic Neon Streaks", shorttitle="Apollo AI Streaks", overlay=true, max_labels_count=500)
+
+// APOLLOTRADINGAI — rule-based technical signals, not a trained AI model.
+// Signals are confirmed only when the candle closes. No profitability is guaranteed.
+
+// ── SIGNAL ENGINE
+fastLength   = input.int(10, "Fast EMA Length", minval=2, group="Signal Engine")
+slowLength   = input.int(30, "Slow EMA Length", minval=3, group="Signal Engine")
+rsiLength    = input.int(14, "RSI Length", minval=2, group="Signal Engine")
+rsiBullLevel = input.float(52.0, "Bullish RSI Threshold", minval=1, maxval=99, step=0.5, group="Signal Engine")
+rsiBearLevel = input.float(48.0, "Bearish RSI Threshold", minval=1, maxval=99, step=0.5, group="Signal Engine")
+confirmBars  = input.int(1, "Consecutive Confirmation Bars", minval=1, maxval=5, group="Signal Engine", tooltip="How many consecutive candles must satisfy the trend rules.")
+cooldownBars = input.int(3, "Minimum Bars Between Signals", minval=0, maxval=100, group="Signal Engine", tooltip="Reduces repeated signals during choppy conditions.")
+
+// ── VISUALS
+showStreak    = input.bool(true, "Show Dynamic Neon Streak", group="Visuals")
+showSignals   = input.bool(true, "Show BUY / SELL Labels", group="Visuals")
+showEMA       = input.bool(false, "Show EMA Lines", group="Visuals")
+showBarColors = input.bool(false, "Tint Candles With Trend", group="Visuals")
+showTrendBg   = input.bool(false, "Subtle Trend Background", group="Visuals")
+glowIntensity = input.int(8, "Glow Brightness (lower = brighter)", minval=0, maxval=90, group="Visuals")
+baseWidthATR  = input.float(0.12, "Base Streak Width (ATR)", minval=0.02, maxval=1.0, step=0.01, group="Visuals")
+growthWidth   = input.float(0.90, "Expansion With Movement", minval=0.0, maxval=2.5, step=0.05, group="Visuals")
+maxWidthATR   = input.float(1.25, "Maximum Streak Half-Width (ATR)", minval=0.15, maxval=3.0, step=0.05, group="Visuals")
+signalDistance = input.float(1.0, "Signal Distance (ATR)", minval=0.2, maxval=5.0, step=0.1, group="Visuals")
+strengthSmooth = input.int(3, "Streak Smoothness", minval=1, maxval=10, group="Visuals")
+
+// ── CUSTOM COLORS
+bullCore   = input.color(color.rgb(0, 255, 132), "Bullish Core", group="Colors")
+bullGlow   = input.color(color.rgb(0, 210, 105), "Bullish Glow", group="Colors")
+bearCore   = input.color(color.rgb(255, 45, 130), "Bearish Core", group="Colors")
+bearGlow   = input.color(color.rgb(255, 20, 95), "Bearish Glow", group="Colors")
+neutralCol = input.color(color.rgb(125, 140, 155), "Neutral", group="Colors")
+
+// ── CALCULATIONS
+fastEMA = ta.ema(close, fastLength)
+slowEMA = ta.ema(close, slowLength)
+rsiVal  = ta.rsi(close, rsiLength)
+atrVal  = ta.atr(14)
+
+validLengths = fastLength < slowLength
+bullRaw = validLengths and fastEMA > slowEMA and close > fastEMA and rsiVal >= rsiBullLevel
+bearRaw = validLengths and fastEMA < slowEMA and close < fastEMA and rsiVal <= rsiBearLevel
+
+// Consecutive confirmation: every bar in the selected window must qualify.
+// Explicit checks avoid relying on ta.sum() and support confirmation settings 1–5.
+bullConfirmed = bullRaw
+bearConfirmed = bearRaw
+for i = 1 to confirmBars - 1
+    bullConfirmed := bullConfirmed and bullRaw[i]
+    bearConfirmed := bearConfirmed and bearRaw[i]
+
+trendState = bullConfirmed ? 1 : bearConfirmed ? -1 : 0
+trendColor = trendState == 1 ? bullCore : trendState == -1 ? bearCore : neutralCol
+glowColor = trendState == 1 ? bullGlow : trendState == -1 ? bearGlow : neutralCol
+
+// Ribbon expands with sustained EMA separation and directional EMA movement,
+// but stays slimmer when movement is small. ATR normalization adapts to volatility.
+emaSpreadATR = atrVal > 0 ? math.abs(fastEMA - slowEMA) / atrVal : 0.0
+emaMoveATR = atrVal > 0 ? math.abs(fastEMA - fastEMA[strengthSmooth]) / atrVal : 0.0
+strengthRaw = math.min(1.0, emaSpreadATR * 0.65 + emaMoveATR * 0.20)
+strength = ta.ema(strengthRaw, strengthSmooth)
+halfWidthATR = math.min(maxWidthATR, baseWidthATR + strength * growthWidth)
+halfWidth = atrVal * halfWidthATR
+
+// ── LAYERED NEON STREAK
+outerUp = plot(showStreak ? fastEMA + halfWidth * 2.35 : na, "Atmosphere Upper", color=color.new(glowColor, 100))
+outerDn = plot(showStreak ? fastEMA - halfWidth * 2.35 : na, "Atmosphere Lower", color=color.new(glowColor, 100))
+fill(outerUp, outerDn, color=color.new(glowColor, math.min(98, glowIntensity + 42)), title="Atmosphere Glow")
+
+midUp = plot(showStreak ? fastEMA + halfWidth * 1.60 : na, "Bloom Upper", color=color.new(glowColor, 100))
+midDn = plot(showStreak ? fastEMA - halfWidth * 1.60 : na, "Bloom Lower", color=color.new(glowColor, 100))
+fill(midUp, midDn, color=color.new(glowColor, math.min(96, glowIntensity + 23)), title="Neon Bloom")
+
+innerUp = plot(showStreak ? fastEMA + halfWidth : na, "Core Upper", color=color.new(trendColor, 100))
+innerDn = plot(showStreak ? fastEMA - halfWidth : na, "Core Lower", color=color.new(trendColor, 100))
+fill(innerUp, innerDn, color=color.new(trendColor, math.min(92, glowIntensity + 9)), title="Inner Neon")
+
+// Crisp price-following spine; trend color changes with confirmed trend state.
+plot(showStreak ? fastEMA : na, "Neon Streak Spine", color=trendColor, linewidth=3)
+plot(showEMA ? fastEMA : na, "Fast EMA", color=bullCore, linewidth=1)
+plot(showEMA ? slowEMA : na, "Slow EMA", color=color.new(neutralCol, 15), linewidth=2)
+barcolor(showBarColors ? color.new(trendColor, 12) : na)
+bgcolor(showTrendBg and trendState != 0 ? color.new(trendColor, 94) : na)
+
+// ── CONFIRMED SIGNALS
+// Signal occurs on the transition into a confirmed state, not on every trend bar.
+rawBuy  = bullConfirmed and not bullConfirmed[1]
+rawSell = bearConfirmed and not bearConfirmed[1]
+var int lastSignalBar = na
+spacingOK = na(lastSignalBar) or (bar_index - lastSignalBar >= cooldownBars + 1)
+buySignal  = rawBuy and barstate.isconfirmed and spacingOK
+sellSignal = rawSell and barstate.isconfirmed and spacingOK
+
+// Spacing is tracked even when chart labels are toggled off.
+if buySignal or sellSignal
+    lastSignalBar := bar_index
+
+buyY  = low - atrVal * signalDistance
+sellY = high + atrVal * signalDistance
+plotshape(showSignals and buySignal ? buyY : na, title="BUY Signal", text="BUY", style=shape.labelup, location=location.absolute, color=bullCore, textcolor=color.black, size=size.small)
+plotshape(showSignals and sellSignal ? sellY : na, title="SELL Signal", text="SELL", style=shape.labeldown, location=location.absolute, color=bearCore, textcolor=color.white, size=size.small)
+
+// Alerts are available to select in TradingView. Users must create each alert there.
+alertcondition(buySignal, title="Apollo BUY", message="ApolloTradingAI BUY confirmed on {{ticker}} ({{interval}}) at {{close}}")
+alertcondition(sellSignal, title="Apollo SELL", message="ApolloTradingAI SELL confirmed on {{ticker}} ({{interval}}) at {{close}}")
+alertcondition(buySignal or sellSignal, title="Apollo BUY or SELL", message="ApolloTradingAI signal on {{ticker}} ({{interval}}) at {{close}}")
